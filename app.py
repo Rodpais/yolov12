@@ -60,16 +60,18 @@ def app():
                     value="Image",
                     label="Input Type",
                 )
+
+                MODEL_DIR = "models"
                 model_id = gr.Dropdown(
                     label="Model",
                     choices=[
-                        "yolov12n.pt",
-                        "yolov12s.pt",
-                        "yolov12m.pt",
-                        "yolov12l.pt",
-                        "yolov12x.pt",
+                        f"{MODEL_DIR}/yolov12n.pt",
+                        f"{MODEL_DIR}/yolov12s.pt",
+                        f"{MODEL_DIR}/yolov12m.pt",
+                        f"{MODEL_DIR}/yolov12l.pt",
+                        f"{MODEL_DIR}/yolov12x.pt",
                     ],
-                    value="yolov12m.pt",
+                   value=f"{MODEL_DIR}/yolov12s.pt",
                 )
                 image_size = gr.Slider(
                     label="Image Size",
@@ -122,7 +124,7 @@ def app():
             examples=[
                 [
                     "ultralytics/assets/bus.jpg",
-                    "yolov12s.pt",
+                    f"{MODEL_DIR}/yolov12s.pt",
                     640,
                     0.25,
                 ],
@@ -161,5 +163,18 @@ with gradio_app:
     with gr.Row():
         with gr.Column():
             app()
-if __name__ == '__main__':
-    gradio_app.launch()
+if __name__ == "__main__":
+    import os
+
+    # limpa proxies para não atrapalhar localhost
+    for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        os.environ.pop(k, None)
+    os.environ["NO_PROXY"] = "127.0.0.1,localhost"
+    os.environ["no_proxy"] = "127.0.0.1,localhost"
+
+    gradio_app.launch(
+        server_name="127.0.0.1", 
+        server_port=7860,
+        share=False,
+        inbrowser=False,        # abre o navegador manualmente
+    )

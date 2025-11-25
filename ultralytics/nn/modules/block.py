@@ -865,61 +865,104 @@ class C2fCIB(C2f):
         self.m = nn.ModuleList(CIB(self.c, self.c, shortcut, e=1.0, lk=lk) for _ in range(n))
 
 
-class Attention(nn.Module):
+class AAttn(nn.Module):
     """
-    Attention module that performs self-attention on the input tensor.
+    Area-attention module (YOLOv12) sem dependência de FlashAttention.
 
-    Args:
-        dim (int): The input tensor dimension.
-        num_heads (int): The number of attention heads.
-        attn_ratio (float): The ratio of the attention key dimension to the head dimension.
-
-    Attributes:
-        num_heads (int): The number of attention heads.
-        head_dim (int): The dimension of each attention head.
-        key_dim (int): The dimension of the attention key.
-        scale (float): The scaling factor for the attention scores.
-        qkv (Conv): Convolutional layer for computing the query, key, and value.
-        proj (Conv): Convolutional layer for projecting the attended values.
-        pe (Conv): Convolutional layer for positional encoding.
+    dim: canais de entrada
+    num_heads: número de cabeças de atenção
+    area: número de áreas em que o mapa é dividido (1 = sem divisão)
     """
 
-    def __init__(self, dim, num_heads=8, attn_ratio=0.5):
-        """Initializes multi-head attention module with query, key, and value convolutions and positional encoding."""
+    def __init__(self, dim: int, num_heads: int, area: int = 1):
         super().__init__()
+        self.area = area
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.key_dim = int(self.head_dim * attn_ratio)
-        self.scale = self.key_dim**-0.5
-        nh_kd = self.key_dim * num_heads
-        h = dim + nh_kd * 2
-        self.qkv = Conv(dim, h, 1, act=False)
-        self.proj = Conv(dim, dim, 1, act=False)
-        self.pe = Conv(dim, dim, 3, 1, g=dim, act=False)
+        all_head_dim = self.head_dim * self.num_heads
 
-    def forward(self, x):
+        # gera Q, K, V de uma vez (C → 3*C)
+        self.qkv = Conv(dim, all_head_dim * 3, 1, act=False)
+
+        # projeta de volta para dim original
+        self.proj = Conv(all_head_dim, dim, 1, act=False)
+
+        # posição relativa / pos-encoding
+        self.pe = Conv(all_head_dim, dim, 7, 1, 3, g=dim, act=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass of the Attention module.
-
-        Args:
-            x (torch.Tensor): The input tensor.
-
-        Returns:
-            (torch.Tensor): The output tensor after self-attention.
+        x: (B, C, H, W)
+        retorno: (B, C, H, W)
         """
         B, C, H, W = x.shape
         N = H * W
-        qkv = self.qkv(x)
-        q, k, v = qkv.view(B, self.num_heads, self.key_dim * 2 + self.head_dim, N).split(
-            [self.key_dim, self.key_dim, self.head_dim], dim=2
+
+        # (B, C, H, W) → (B, N, 3*C)
+        qkv = self.qkv(x).flatten(2).transpose(1, 2)
+
+        # se usar área > 1, divide a imagem em blocos
+        if self.area > 1:
+            qkv = qkv.reshape(B * self.area, N // self.area, C * 3)
+            B_eff, N_eff, _ = qkv.shape
+        else:
+            B_eff, N_eff = B, N
+
+        # separa Q, K, V e organiza por cabeças
+        q, k, v = qkv.view(B_eff, N_eff, self.num_heads, self.head_dim * 3).split(
+            (self.head_dim, self.head_dim, self.head_dim), dim=3
         )
 
-        attn = (q.transpose(-2, -1) @ k) * self.scale
-        attn = attn.softmax(dim=-1)
-        x = (v @ attn.transpose(-2, -1)).view(B, C, H, W) + self.pe(v.reshape(B, C, H, W))
-        x = self.proj(x)
-        return x
+        # (B, N, num_heads, head_dim) → (B, num_heads, head_dim, N)
+        q = q.permute(0, 2, 3, 1)
+        k = k.permute(0, 2, 3, 1)
+        v = v.permute(0, 2, 3, 1)
 
+        # atenção “na mão” (sem flash_attn)
+        attn = (q.transpose(-2, -1) @ k) * (self.head_dim ** -0.5)
+        max_attn = attn.max(dim=-1, keepdim=True).values
+        exp_attn = torch.exp(attn - max_attn)
+        attn = exp_attn / exp_attn.sum(dim=-1, keepdim=True)
+
+        out = v @ attn.transpose(-2, -1)  # (B, num_heads, head_dim, N)
+        out = out.permute(0, 3, 1, 2)     # (B, N, num_heads, head_dim)
+        v = v.permute(0, 3, 1, 2)
+
+        # reverte a divisão em áreas, se tiver
+        if self.area > 1:
+            out = out.reshape(B, N, C)
+            v = v.reshape(B, N, C)
+            B2, N2, _ = out.shape
+        else:
+            B2, N2 = B_eff, N_eff
+
+        # volta para (B, C, H, W)
+        out = out.reshape(B2, H, W, C).permute(0, 3, 1, 2)
+        v = v.reshape(B2, H, W, C).permute(0, 3, 1, 2)
+
+        # posição relativa + projeção
+        out = out + self.pe(v)
+        out = self.proj(out)
+
+        return out
+
+class Attention(nn.Module):
+    """
+    Implementação mínima de Attention para compatibilidade com YOLOv12.
+
+    Internamente, reaproveita o AAttn (area-attention) com area=1.
+    Os parâmetros attn_ratio e num_heads são mantidos na assinatura
+    apenas por compatibilidade com o código original.
+    """
+
+    def __init__(self, c, attn_ratio=0.5, num_heads=4):
+        super().__init__()
+        # garante pelo menos 1 cabeça
+        nh = max(1, int(num_heads) if num_heads is not None else 1)
+        self.attn = AAttn(dim=c, num_heads=nh, area=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.attn(x)
 
 class PSABlock(nn.Module):
     """
@@ -1160,105 +1203,6 @@ class TorchVision(nn.Module):
 import logging
 logger = logging.getLogger(__name__)
 
-USE_FLASH_ATTN = False
-try:
-    import torch
-    if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:  # Ampere or newer
-        from flash_attn.flash_attn_interface import flash_attn_func
-        USE_FLASH_ATTN = True
-    else:
-        from torch.nn.functional import scaled_dot_product_attention as sdpa
-        logger.warning("FlashAttention is not available on this device. Using scaled_dot_product_attention instead.")
-except Exception:
-    from torch.nn.functional import scaled_dot_product_attention as sdpa
-    logger.warning("FlashAttention is not available on this device. Using scaled_dot_product_attention instead.")
-
-class AAttn(nn.Module):
-    """
-    Area-attention module with the requirement of flash attention.
-
-    Attributes:
-        dim (int): Number of hidden channels;
-        num_heads (int): Number of heads into which the attention mechanism is divided;
-        area (int, optional): Number of areas the feature map is divided. Defaults to 1.
-
-    Methods:
-        forward: Performs a forward process of input tensor and outputs a tensor after the execution of the area attention mechanism.
-
-    Examples:
-        >>> import torch
-        >>> from ultralytics.nn.modules import AAttn
-        >>> model = AAttn(dim=64, num_heads=2, area=4)
-        >>> x = torch.randn(2, 64, 128, 128)
-        >>> output = model(x)
-        >>> print(output.shape)
-    
-    Notes: 
-        recommend that dim//num_heads be a multiple of 32 or 64.
-
-    """
-
-    def __init__(self, dim, num_heads, area=1):
-        """Initializes the area-attention module, a simple yet efficient attention module for YOLO."""
-        super().__init__()
-        self.area = area
-
-        self.num_heads = num_heads
-        self.head_dim = head_dim = dim // num_heads
-        all_head_dim = head_dim * self.num_heads
-
-        self.qk = Conv(dim, all_head_dim * 2, 1, act=False)
-        self.v = Conv(dim, all_head_dim, 1, act=False)
-        self.proj = Conv(all_head_dim, dim, 1, act=False)
-
-        self.pe = Conv(all_head_dim, dim, 5, 1, 2, g=dim, act=False)
-
-
-    def forward(self, x):
-        """Processes the input tensor 'x' through the area-attention"""
-        B, C, H, W = x.shape
-        N = H * W
-
-        qk = self.qk(x).flatten(2).transpose(1, 2)
-        v = self.v(x)
-        pp = self.pe(v)
-        v = v.flatten(2).transpose(1, 2)
-
-        if self.area > 1:
-            qk = qk.reshape(B * self.area, N // self.area, C * 2)
-            v = v.reshape(B * self.area, N // self.area, C)
-            B, N, _ = qk.shape
-        q, k = qk.split([C, C], dim=2)
-
-        if x.is_cuda and USE_FLASH_ATTN:
-            q = q.view(B, N, self.num_heads, self.head_dim)
-            k = k.view(B, N, self.num_heads, self.head_dim)
-            v = v.view(B, N, self.num_heads, self.head_dim)
-
-            x = flash_attn_func(
-                q.contiguous().half(),
-                k.contiguous().half(),
-                v.contiguous().half()
-            ).to(q.dtype)
-        else:
-            q = q.transpose(1, 2).view(B, self.num_heads, self.head_dim, N)
-            k = k.transpose(1, 2).view(B, self.num_heads, self.head_dim, N)
-            v = v.transpose(1, 2).view(B, self.num_heads, self.head_dim, N)
-
-            attn = (q.transpose(-2, -1) @ k) * (self.head_dim ** -0.5)
-            max_attn = attn.max(dim=-1, keepdim=True).values
-            exp_attn = torch.exp(attn - max_attn)
-            attn = exp_attn / exp_attn.sum(dim=-1, keepdim=True)
-            x = (v @ attn.transpose(-2, -1))
-
-            x = x.permute(0, 3, 1, 2)
-
-        if self.area > 1:
-            x = x.reshape(B // self.area, N * self.area, C)
-            B, N, _ = x.shape
-        x = x.reshape(B, H, W, C).permute(0, 3, 1, 2)
-
-        return self.proj(x + pp)
     
 
 class ABlock(nn.Module):

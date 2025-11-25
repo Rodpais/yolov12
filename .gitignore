@@ -1,1 +1,77 @@
-*__pycache__/
+# -----------------------------
+# Ambientes virtuais
+# -----------------------------
+.venv/
+venv/
+ENV/
+env/
+
+# -----------------------------
+# Cache e artefatos Python
+# -----------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+*.egg
+*.manifest
+*.spec
+
+# -----------------------------
+# Build e distribuição
+# -----------------------------
+build/
+dist/
+pip-wheel-metadata/
+
+# -----------------------------
+# Configurações de IDEs
+# -----------------------------
+.vscode/
+.idea/
+*.swp
+
+# -----------------------------
+# Logs
+# -----------------------------
+*.log
+logs/
+
+# -----------------------------
+# Arquivos de ambiente e credenciais
+# -----------------------------
+.env
+.env.*
+*.key
+*.pem
+*.pt
+
+# -----------------------------
+# Arquivos temporários do sistema
+# -----------------------------
+.DS_Store
+Thumbs.db
+*.tmp
+~$*
+
+# -----------------------------
+# Arquivos de cache de frameworks
+# -----------------------------
+.cache/
+.ipynb_checkpoints/
+
+# -----------------------------
+# Arquivos do Flask / Streamlit
+# -----------------------------
+instance/
+*.db
+*.sqlite
+*.sqlite3
+
+# -----------------------------
+# Outros
+# -----------------------------
+# Conteúdos gerados automaticamente
+gradio_cached_examples/

@@ -1,0 +1,48 @@
+# --- Ambiente YOLOv12 - Windows / CPU only ---
+# Compatível com Python 3.11 e PyTorch 2.2.2+cpu
+
+# Núcleo PyTorch CPU
+torch==2.2.2
+torchvision==0.17.2
+
+# Modelos e pipelines
+timm==1.0.14
+albumentations==2.0.4
+albucore==0.0.23
+onnx==1.14.0
+onnxruntime==1.15.1      # versão estável CPU
+onnxslim==0.1.31
+
+# Utilitários essenciais
+numpy==1.26.4
+scipy==1.13.0
+pandas==2.3.3
+matplotlib==3.10.7
+PyYAML==6.0.1
+psutil==5.9.8
+py-cpuinfo==9.0.0
+safetensors==0.4.3
+huggingface-hub==0.23.2
+supervision==0.22.0
+
+# Interfaces e APIs
+gradio==4.44.1
+fastapi==0.119.0
+uvicorn==0.37.0
+
+# Visão computacional (com GUI)
+opencv-python==4.11.0.86
+# Se quiser versão sem GUI (headless, para servidores), substitua a linha acima por:
+# opencv-python-headless==4.11.0.86
+
+# Outras dependências recomendadas
+pycocotools==2.0.7
+tqdm==4.67.1
+requests==2.32.5
+typing-extensions==4.15.0
+coloredlogs==15.0.1
+
+# --- Removidos ---
+# flash_attn (incompatível com Windows/CPU)
+# onnxruntime-gpu (GPU only)
+# opencv-python-headless duplicado
